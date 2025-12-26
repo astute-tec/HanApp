@@ -114,6 +114,7 @@ class LearningViewModel(application: Application, private val userId: Long) : An
             userRepository.getUserFlow(userId).collectLatest { user ->
                 if (user != null) {
                     _totalTime.longValue = user.totalLearningTime
+                    _score.value = user.totalPoints // 确保显示的是数据库中的总分
                     // 当用户信息变化时（如从登录页切回且由于 VM 复用导致没跑 init）
                     updateProgressLists()
                     // 如果当前没字，尝试加载一个
@@ -243,8 +244,13 @@ class LearningViewModel(application: Application, private val userId: Long) : An
     fun clearHistoryInk() {
         _currentCharacter.value?.let { char ->
             viewModelScope.launch {
-                val progress = UserProgress(userId, char.id, lastScore = 0, lastModified = System.currentTimeMillis())
-                userRepository.saveProgress(progress)
+                val progress = userRepository.getProgress(userId, char.id)
+                val updatedProgress = (progress ?: UserProgress(userId, char.id)).copy(
+                    lastScore = 0,
+                    lastWritingInk = null,
+                    lastModified = System.currentTimeMillis()
+                )
+                userRepository.saveProgress(updatedProgress)
                 _currentHistoryInk.value = null
                 updateProgressLists()
             }
