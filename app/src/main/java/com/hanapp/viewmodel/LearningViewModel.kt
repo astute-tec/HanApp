@@ -473,10 +473,13 @@ class LearningViewModel(application: Application, private val userId: Long) : An
             FALLBACK_WORDS[character.id] ?: character.id
         }
         
-        return if (word.length > 1 && word.contains(character.id)) {
-            "${character.id}，${word}的${character.id}"
-        } else {
-            character.id
+        return when {
+            word == character.id -> character.id
+            // 如果是诗句（通常较长且含有标点或空格，或者字数>4）
+            word.length > 4 -> "${character.id}，“$word”的${character.id}"
+            // 如果是成语或组词
+            word.contains(character.id) -> "${character.id}，$word"
+            else -> "${character.id}，比如$word"
         }
     }
 
@@ -502,24 +505,24 @@ class LearningViewModel(application: Application, private val userId: Long) : An
         )
 
         private val FALLBACK_WORDS = mapOf(
-            "一" to "一个", "二" to "二月", "三" to "三天", "十" to "十足",
-            "上" to "上下", "下" to "上下", "左" to "左右", "右" to "左右",
-            "中" to "中国", "大" to "大小", "小" to "大小", "人" to "好人",
-            "天" to "天气", "地" to "大地", "日" to "日子", "月" to "月亮",
-            "山" to "高山", "水" to "喝水", "火" to "大火", "木" to "木头",
-            "手" to "小手", "口" to "开口", "耳" to "耳朵", "目" to "目光",
-            "头" to "头发", "米" to "大米", "花" to "花草", "鸟" to "小鸟",
-            "鱼" to "金鱼", "虫" to "小虫", "云" to "白云", "雨" to "大雨",
-            "风" to "大风", "雪" to "雪人", "春" to "春天", "夏" to "夏天",
-            "秋" to "秋天", "冬" to "冬天", "爸" to "爸爸", "妈" to "妈妈",
-            "我" to "我们", "你" to "你们", "他" to "他们", "好" to "你好",
-            "见" to "再见", "开" to "开始", "关" to "关门", "来" to "回来",
-            "去" to "过去", "坐" to "坐下", "走" to "走路", "听" to "听说",
-            "说" to "说话", "读" to "读书", "写" to "写字", "看" to "好看",
-            "爱" to "爱人", "家" to "回家", "校" to "学校", "书" to "读书",
+            "一" to "一心一意", "二" to "二龙戏珠", "三" to "三省吾身", "十" to "十全十美",
+            "上" to "蒸蒸日上", "下" to "下笔成章", "左" to "左右逢源", "右" to "无出其右",
+            "中" to "中流砥柱", "大" to "大展宏图", "小" to "小巧玲珑", "人" to "人杰地灵",
+            "天" to "海阔天空", "地" to "地大物博", "日" to "日新月异", "月" to "海上生明月",
+            "山" to "山高水长", "水" to "上善若水", "火" to "星星之火", "木" to "木秀于林",
+            "手" to "妙手回春", "口" to "口若悬河", "耳" to "耳濡目染", "目" to "目不暇接",
+            "头" to "头角峥嵘", "米" to "谁知盘中餐，粒粒皆辛苦", "花" to "鸟语花香", "鸟" to "笨鸟先飞",
+            "鱼" to "鱼跃龙门", "虫" to "雕虫小技", "云" to "云淡风轻", "雨" to "风调雨顺",
+            "风" to "春风化雨", "雪" to "雪中送炭", "春" to "春华秋实", "夏" to "夏炉冬扇",
+            "秋" to "一叶知秋", "冬" to "冬日夏云", "爸" to "父爱如山", "妈" to "母爱如水",
+            "我" to "忘我奋斗", "你" to "你好", "他" to "他山之石", "好" to "好学不倦",
+            "见" to "见微知著", "开" to "开卷有益", "关" to "关怀备至", "来" to "继往开来",
+            "去" to "去伪存真", "坐" to "坐怀不乱", "走" to "走马观花", "听" to "兼听则明",
+            "说" to "说一不二", "读" to "读万卷书", "写" to "妙笔生花", "看" to "看破红尘",
+            "爱" to "爱屋及乌", "家" to "诗礼传家", "校" to "学校", "书" to "书山有路",
             "万" to "万紫千红", "紫" to "万紫千红", "红" to "万紫千红", "千" to "万紫千红",
             "举" to "举一反三", "反" to "举一反三", "什" to "什么", "么" to "什么",
-            "学" to "学而不倦", "温" to "温故知新", "故" to "温故知新", "知" to "温故知新",
+            "学" to "学而不厌", "温" to "温故知新", "故" to "温故知新", "知" to "温故知新",
             "新" to "温故知新", "先" to "笨鸟先飞", "勤" to "勤能补拙", "拙" to "勤能补拙",
             "专" to "专心致志", "致" to "专心致志", "志" to "专心致志", "全" to "全神贯注",
             "神" to "全神贯注", "贯" to "全神贯注", "注" to "全神贯注", "融" to "融会贯通",
