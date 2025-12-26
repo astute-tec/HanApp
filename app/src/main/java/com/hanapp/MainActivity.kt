@@ -138,7 +138,17 @@ fun LearningScreen(
                         modifier = Modifier.weight(3f).fillMaxHeight(),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        UserHeader(userName, userAvatar, feedback, score, true, onBackToLogin)
+                        UserHeader(
+                            userName, 
+                            userAvatar, 
+                            feedback, 
+                            score, 
+                            viewModel.totalTime.value,
+                            viewModel.dailyTime.value,
+                            viewModel.dailyCharCount.value,
+                            true, 
+                            onBackToLogin
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
                         
                         Box(
@@ -154,14 +164,19 @@ fun LearningScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.Center
                         ) {
-                            AppButton("教教我", MaterialTheme.colorScheme.secondary) { 
+                            AppButton("笔顺", MaterialTheme.colorScheme.secondary) { 
                                 clearTrigger++
                                 viewModel.startDemo() 
                             }
                             Spacer(modifier = Modifier.width(32.dp))
-                             AppButton(if (viewModel.isReviewMode.value) "重新书写" else "我要重写", MaterialTheme.colorScheme.tertiary) { 
+                             AppButton("重写", MaterialTheme.colorScheme.tertiary) { 
                                  clearTrigger++ 
                                  viewModel.clearHistoryInk()
+                             }
+                             Spacer(modifier = Modifier.width(32.dp))
+                             AppButton("继续", MaterialTheme.colorScheme.primary) { 
+                                 clearTrigger++
+                                 viewModel.loadNextCharacter()
                              }
                         }
                     }
@@ -172,7 +187,17 @@ fun LearningScreen(
             } else {
                 // 手机模式
                 Column(modifier = Modifier.fillMaxSize()) {
-                    UserHeader(userName, userAvatar, feedback, score, false, onBackToLogin)
+                    UserHeader(
+                        userName, 
+                        userAvatar, 
+                        feedback, 
+                        score, 
+                        viewModel.totalTime.value,
+                        viewModel.dailyTime.value,
+                        viewModel.dailyCharCount.value,
+                        false, 
+                        onBackToLogin
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                         LearningCard(viewModel, character, isShowingDemo, clearTrigger, { clearTrigger++ }, false)
@@ -181,14 +206,33 @@ fun LearningScreen(
                     ProgressSidebar(viewModel, userId, false, modifier = Modifier.fillMaxWidth().height(150.dp))
                     
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        AppButton("教教我", MaterialTheme.colorScheme.secondary) { 
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), 
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        AppButton(
+                            "笔顺", 
+                            MaterialTheme.colorScheme.secondary, 
+                            modifier = Modifier.weight(1f)
+                        ) { 
                             clearTrigger++
                             viewModel.startDemo() 
                         }
-                        AppButton(if (viewModel.isReviewMode.value) "重新书写" else "我要重写", MaterialTheme.colorScheme.tertiary) { 
+                        AppButton(
+                            "重写", 
+                            MaterialTheme.colorScheme.tertiary, 
+                            modifier = Modifier.weight(1f)
+                        ) { 
                              clearTrigger++ 
                              viewModel.clearHistoryInk()
+                        }
+                        AppButton(
+                            "继续", 
+                            MaterialTheme.colorScheme.primary, 
+                            modifier = Modifier.weight(1f)
+                        ) { 
+                             clearTrigger++ 
+                             viewModel.loadNextCharacter()
                         }
                     }
                 }
@@ -200,31 +244,71 @@ fun LearningScreen(
 }
 
 @Composable
-fun UserHeader(name: String, avatar: String, feedback: String, score: Int, isWideScreen: Boolean, onBack: () -> Unit) {
+fun UserHeader(
+    name: String, 
+    avatar: String, 
+    feedback: String, 
+    score: Int, 
+    totalSeconds: Long,
+    dailySeconds: Long,
+    dailyChars: Int,
+    isWideScreen: Boolean, 
+    onBack: () -> Unit
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val avatarId = context.resources.getIdentifier(avatar, "drawable", context.packageName)
 
-    Row(
+    fun formatTime(seconds: Long): String {
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        return if (h > 0) "${h}时${m}分" else "${m}分"
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color.White.copy(alpha = 0.8f), shape = RoundedCornerShape(20.dp))
-            .padding(if (isWideScreen) 12.dp else 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(if (isWideScreen) 12.dp else 10.dp)
     ) {
-        Image(
-            painter = painterResource(id = if(avatarId != 0) avatarId else R.drawable.pony_mascot),
-            contentDescription = null,
-            modifier = Modifier.size(if (isWideScreen) 80.dp else 60.dp).clip(CircleShape).clickable { onBack() }
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = "$name 的魔法屋", fontSize = 14.sp, color = Color.Gray)
-            Text(text = feedback, fontSize = if (isWideScreen) 22.sp else 18.sp, color = Color(0xFF880E4F), fontWeight = FontWeight.Bold, maxLines = 1)
+        Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Image(
+                painter = painterResource(id = if(avatarId != 0) avatarId else R.drawable.pony_mascot),
+                contentDescription = null,
+                modifier = Modifier.size(if (isWideScreen) 80.dp else 60.dp).clip(CircleShape).clickable { onBack() }
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "$name 的魔法屋", fontSize = 14.sp, color = Color.Gray)
+                Text(text = feedback, fontSize = if (isWideScreen) 22.sp else 18.sp, color = Color(0xFF880E4F), fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(text = "总积分", fontSize = 12.sp, color = Color.Gray)
+                Text(text = "$score", fontSize = 24.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
         }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(text = "总积分", fontSize = 12.sp, color = Color.Gray)
-            Text(text = "$score", fontSize = 24.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        Divider(color = Color.LightGray.copy(alpha = 0.5f), thickness = 0.5.dp)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            StatItem("总时长", formatTime(totalSeconds + dailySeconds), isWideScreen)
+            StatItem("今日时长", formatTime(dailySeconds), isWideScreen)
+            StatItem("今日学字", "${dailyChars}个", isWideScreen)
         }
+    }
+}
+
+@Composable
+fun StatItem(label: String, value: String, isWideScreen: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(text = "$label: ", fontSize = if(isWideScreen) 14.sp else 12.sp, color = Color.Gray)
+        Text(text = value, fontSize = if(isWideScreen) 16.sp else 14.sp, color = Color(0xFFE91E63), fontWeight = FontWeight.Medium)
     }
 }
 
@@ -517,7 +601,7 @@ fun ProgressItemGrid(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun AppButton(text: String, color: Color, onClick: () -> Unit) {
+fun AppButton(text: String, color: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.92f else 1f,
@@ -528,9 +612,8 @@ fun AppButton(text: String, color: Color, onClick: () -> Unit) {
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = color),
         shape = RoundedCornerShape(24.dp),
-        modifier = Modifier
+        modifier = modifier
             .height(64.dp)
-            .width(160.dp)
             .graphicsLayer(scaleX = scale, scaleY = scale)
             .pointerInteropFilter {
                 when (it.action) {
@@ -541,6 +624,6 @@ fun AppButton(text: String, color: Color, onClick: () -> Unit) {
             },
         elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
     ) {
-        Text(text = text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(text = text, fontSize = if(text.length > 4) 16.sp else 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }

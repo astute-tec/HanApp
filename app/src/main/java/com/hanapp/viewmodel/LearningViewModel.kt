@@ -3,6 +3,8 @@ package com.hanapp.viewmodel
 import android.app.Application
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hanapp.data.AppDatabase
@@ -89,26 +91,92 @@ class LearningViewModel(application: Application, private val userId: Long) : An
 
     private val _isReviewMode = mutableStateOf(false)
     val isReviewMode: State<Boolean> = _isReviewMode
+    
+    // 统计相关状态
+    private val _totalTime = mutableLongStateOf(0L) // 总时长（秒）
+    val totalTime: State<Long> = _totalTime
+    
+    private val _dailyTime = mutableLongStateOf(0L) // 今日时长（秒）
+    val dailyTime: State<Long> = _dailyTime
+    
+    private val _dailyCharCount = mutableIntStateOf(0) // 今日学字量
+    val dailyCharCount: State<Int> = _dailyCharCount
+    
+    private var sessionStartTime = System.currentTimeMillis()
+    private var lastSaveTime = System.currentTimeMillis()
 
     init {
         viewModelScope.launch {
+            // 1. 确保数据导入完成
             repository.importDataFromAssets(application)
-            updateProgressLists()
-            loadNextCharacter()
             
-            // 订阅波形数据
-            launch {
-                audioManager.amplitudes.collectLatest {
-                    _amplitudes.value = it
+            // 2. 监听用户状态变化（核心：年级切换自动触发刷新）
+            userRepository.getUserFlow(userId).collectLatest { user ->
+                if (user != null) {
+                    _totalTime.longValue = user.totalLearningTime
+                    // 当用户信息变化时（如从登录页切回且由于 VM 复用导致没跑 init）
+                    updateProgressLists()
+                    // 如果当前没字，尝试加载一个
+                    if (_currentCharacter.value == null) {
+                        loadNextCharacter()
+                    }
                 }
+            }
+        }
+
+        // 3. 统计定时器
+        viewModelScope.launch {
+            while (true) {
+                delay(10000)
+                val now = System.currentTimeMillis()
+                val deltaSec = (now - sessionStartTime) / 1000
+                _dailyTime.longValue = deltaSec
+                
+                if (now - lastSaveTime > 60000) {
+                    saveTotalTime()
+                    lastSaveTime = now
+                }
+            }
+        }
+
+        // 4. 波形监听
+        viewModelScope.launch {
+            audioManager.amplitudes.collectLatest {
+                _amplitudes.value = it
+            }
+        }
+    }
+    
+    private fun saveTotalTime() {
+        viewModelScope.launch {
+            userRepository.getUserById(userId)?.let { user ->
+                val now = System.currentTimeMillis()
+                val sessionSec = (now - sessionStartTime) / 1000
+                // 我们不直接重写 sessionStartTime，而是累加并更新 lastSaveTime
+                // 下面代码采用累加逻辑
+                val updatedTotal = user.totalLearningTime + (now - lastSaveTime) / 1000
+                userRepository.updateUser(user.copy(totalLearningTime = updatedTotal))
+                _totalTime.longValue = updatedTotal
             }
         }
     }
 
     private suspend fun updateProgressLists() {
-        val allChars = characterDao.getAllCharactersByGrade(1)
+        val user = userRepository.getUserById(userId)
+        val grade = user?.currentGrade ?: 1
+        val allChars = characterDao.getAllCharactersByGrade(grade)
         val allProgress = userRepository.getUserTotalProgress(userId)
         val progressMap = allProgress.associateBy { it.characterId }
+        
+        // 计算今日字数 (lastModified 在今天零点之后且得分过关)
+        val todayStart = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        
+        _dailyCharCount.intValue = allProgress.count { it.lastModified >= todayStart && it.lastScore >= 6 }
 
         _learnedCharacters.value = allChars.filter { char -> 
             (progressMap[char.id]?.lastScore ?: 0) >= 6 
@@ -119,7 +187,7 @@ class LearningViewModel(application: Application, private val userId: Long) : An
         }.sortedBy { it.id }
     }
 
-    private fun loadNextCharacter() {
+    fun loadNextCharacter() {
         viewModelScope.launch {
             // 确保拿到最新的进度列表
             updateProgressLists()
@@ -137,7 +205,9 @@ class LearningViewModel(application: Application, private val userId: Long) : An
             
             // 如果还是没有（说明是最后一关了），则循环回第一个
             if (charToLoad == null) {
-                charToLoad = characterDao.getFirstCharacterByGrade(1)
+                val user = userRepository.getUserById(userId)
+                val grade = user?.currentGrade ?: 1
+                charToLoad = characterDao.getFirstCharacterByGrade(grade)
             }
 
             charToLoad?.let {
@@ -161,7 +231,8 @@ class LearningViewModel(application: Application, private val userId: Long) : An
             val progress = userRepository.getProgress(userId, char.id)
             _currentHistoryInk.value = progress?.lastWritingInk?.let { deserializeInk(it) }
             
-            _feedbackMessage.value = if (isReview) "回味一下 '${char.id}' 怎么写吧！" else "快来写写这个 '${char.id}' 字吧！"
+            val word = if (char.exampleWords.isNotEmpty()) "（${char.exampleWords[0]}）" else ""
+            _feedbackMessage.value = if (isReview) "回味一下 '${char.id}' $word 怎么写吧！" else "快来写写这个 '${char.id}' $word 字吧！"
             if ((progress?.lastScore ?: 0) > 0 && !isReview) {
                 _feedbackMessage.value = "上次拿了 ${progress?.lastScore} 分，尝试突破自己吗？"
             }
@@ -185,10 +256,10 @@ class LearningViewModel(application: Application, private val userId: Long) : An
 
     // 语音交互方法
     fun pronounceCurrentChar() {
-        _currentCharacter.value?.id?.let {
+        _currentCharacter.value?.let { char ->
             viewModelScope.launch {
                 _isSpeaking.value = true
-                tts.speak(it)
+                tts.speak(getPronunciationText(char))
                 delay(1000)
                 _isSpeaking.value = false
             }
@@ -220,13 +291,28 @@ class LearningViewModel(application: Application, private val userId: Long) : An
                     _pronunciationStars.value = stars
                     
                     if (stars > 0) {
-                        val bonusPoints = stars * 2
-                        _score.value += bonusPoints
-                        _feedbackMessage.value = "读得真好！获得了 $stars 颗星，奖励 $bonusPoints 分！"
+                        val progress = userRepository.getProgress(userId, target)
+                        val oldStars = progress?.pronunciationScore ?: 0
                         
-                        // 同步更新数据库总积分
-                        userRepository.getUserById(userId)?.let { user ->
-                            userRepository.updateUser(user.copy(totalPoints = user.totalPoints + bonusPoints))
+                        if (stars > oldStars) {
+                            val newBonus = (stars - oldStars) * 2
+                            _score.value += newBonus
+                            _feedbackMessage.value = "读得真好！获得了 $stars 颗星，由于新记录奖励 $newBonus 分！"
+                            
+                            // 更新用户进度和积分
+                            userRepository.saveProgress(
+                                (progress ?: UserProgress(userId, target)).copy(
+                                    pronunciationScore = stars,
+                                    lastModified = System.currentTimeMillis()
+                                )
+                            )
+                            userRepository.getUserById(userId)?.let { user ->
+                                userRepository.updateUser(user.copy(totalPoints = user.totalPoints + newBonus))
+                            }
+                        } else {
+                            val reward = REWARD_PHRASES.random()
+                            _feedbackMessage.value = "读得很好！（这次拿了 $stars 颗星，由于没破纪录，就不重复给分啦）"
+                            tts.speak(reward)
                         }
                     } else {
                         _feedbackMessage.value = "声音太小了，大声一点试试？"
@@ -275,19 +361,27 @@ class LearningViewModel(application: Application, private val userId: Long) : An
                 isHandlingSuccess = true
 
                 if (!isReview) {
-                    _score.value += resultScore
-                    if (resultScore >= 8) _showFireworks.value = true
+                    val progress = userRepository.getProgress(userId, targetChar)
+                    val oldHighScore = progress?.highScore ?: 0
                     
-                    userRepository.getUserById(userId)?.let { user ->
-                        userRepository.updateUser(user.copy(totalPoints = user.totalPoints + resultScore))
+                    if (resultScore > oldHighScore) {
+                        val newPoints = resultScore - oldHighScore
+                        _score.value += newPoints
+                        _feedbackMessage.value = when {
+                            resultScore >= 10 -> "入木三分！破纪录奖励 $newPoints 分！"
+                            else -> "更上一层楼！奖励 $newPoints 分！"
+                        }
+                        
+                        userRepository.getUserById(userId)?.let { user ->
+                            userRepository.updateUser(user.copy(totalPoints = user.totalPoints + newPoints))
+                        }
+                    } else {
+                        _feedbackMessage.value = "写得不错！（这次得了 $resultScore 分，继续努力破纪录吧！）"
                     }
-                }
-                
-                _feedbackMessage.value = when {
-                    isReview -> "最后一次写得真漂亮！"
-                    result.isWrongOrder -> "字写对了，但笔顺不对哦（扣1分）"
-                    resultScore >= 10 -> "入木三分，极品作！"
-                    else -> "很有灵气，得了 $resultScore 分！"
+
+                    if (resultScore >= 8) _showFireworks.value = true
+                } else {
+                    _feedbackMessage.value = "最后一次写得真漂亮！"
                 }
                 
                 if (result.isWrongOrder) {
@@ -295,21 +389,27 @@ class LearningViewModel(application: Application, private val userId: Long) : An
                     delay(1500)
                 }
                 
-                tts.speak(targetChar)
-                delay(1200)
-                tts.speak(targetChar)
-                delay(2000)
-                if (!isReview) tts.speak("你真棒！")
+                val pronunciationText = getPronunciationText(current)
+                _feedbackMessage.value = pronunciationText
+                tts.speak(pronunciationText)
+                // 增加延迟，确保特别是成语等长词能读完再进行下一步
+                delay(4500) 
+                if (!isReview) {
+                    val reward = REWARD_PHRASES.random()
+                    _feedbackMessage.value = reward
+                    tts.speak(reward)
+                    delay(1500)
+                }
                 
                 val inkJson = serializeInk(ink)
-                val progress = UserProgress(
-                    userId = userId,
-                    characterId = targetChar,
+                val currentProgress = userRepository.getProgress(userId, targetChar)
+                val updatedProgress = (currentProgress ?: UserProgress(userId, targetChar)).copy(
                     lastWritingInk = inkJson,
                     lastScore = resultScore,
+                    highScore = maxOf(currentProgress?.highScore ?: 0, resultScore),
                     lastModified = System.currentTimeMillis()
                 )
-                userRepository.saveProgress(progress)
+                userRepository.saveProgress(updatedProgress)
                 updateProgressLists()
                 
                 if (!isReview) {
@@ -360,8 +460,80 @@ class LearningViewModel(application: Application, private val userId: Long) : An
         } catch (e: Exception) { null }
     }
 
+    private fun getPronunciationText(character: Character): String {
+        val word = if (character.exampleWords.isNotEmpty()) {
+            character.exampleWords[0]
+        } else {
+            FALLBACK_WORDS[character.id] ?: character.id
+        }
+        
+        return if (word.length > 1 && word.contains(character.id)) {
+            "${character.id}，${word}的${character.id}"
+        } else {
+            character.id
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         tts.shutdown()
+    }
+
+    companion object {
+        private val REWARD_PHRASES = listOf(
+            "你真棒！",
+            "太厉害了！",
+            "写的真漂亮！",
+            "简直是小书法家！",
+            "进步真大，为你点赞！",
+            "太完美了，继续加油！",
+            "你真是一门心思学好汉字！",
+            "你的字越来越有灵气了！",
+            "卓越的表现，你是最棒的！",
+            "看你的字真是一种享受！",
+            "哇，写的太工整了！",
+            "你真是个汉字小达人！"
+        )
+
+        private val FALLBACK_WORDS = mapOf(
+            "一" to "一个", "二" to "二月", "三" to "三天", "十" to "十足",
+            "上" to "上下", "下" to "上下", "左" to "左右", "右" to "左右",
+            "中" to "中国", "大" to "大小", "小" to "大小", "人" to "好人",
+            "天" to "天气", "地" to "大地", "日" to "日子", "月" to "月亮",
+            "山" to "高山", "水" to "喝水", "火" to "大火", "木" to "木头",
+            "手" to "小手", "口" to "开口", "耳" to "耳朵", "目" to "目光",
+            "头" to "头发", "米" to "大米", "花" to "花草", "鸟" to "小鸟",
+            "鱼" to "金鱼", "虫" to "小虫", "云" to "白云", "雨" to "大雨",
+            "风" to "大风", "雪" to "雪人", "春" to "春天", "夏" to "夏天",
+            "秋" to "秋天", "冬" to "冬天", "爸" to "爸爸", "妈" to "妈妈",
+            "我" to "我们", "你" to "你们", "他" to "他们", "好" to "你好",
+            "见" to "再见", "开" to "开始", "关" to "关门", "来" to "回来",
+            "去" to "过去", "坐" to "坐下", "走" to "走路", "听" to "听说",
+            "说" to "说话", "读" to "读书", "写" to "写字", "看" to "好看",
+            "爱" to "爱人", "家" to "回家", "校" to "学校", "书" to "读书",
+            "万" to "万紫千红", "紫" to "万紫千红", "红" to "万紫千红", "千" to "万紫千红",
+            "举" to "举一反三", "反" to "举一反三", "什" to "什么", "么" to "什么",
+            "学" to "学而不倦", "温" to "温故知新", "故" to "温故知新", "知" to "温故知新",
+            "新" to "温故知新", "先" to "笨鸟先飞", "勤" to "勤能补拙", "拙" to "勤能补拙",
+            "专" to "专心致志", "致" to "专心致志", "志" to "专心致志", "全" to "全神贯注",
+            "神" to "全神贯注", "贯" to "全神贯注", "注" to "全神贯注", "融" to "融会贯通",
+            "通" to "融会贯通", "止" to "学无止境", "诚" to "诚实守信", "信" to "诚实守信",
+            "助" to "助人为乐", "勇" to "勇往直前", "正" to "正直无私", "宽" to "宽宏大量",
+            "忠" to "忠心耿耿", "智" to "智勇双全", "足" to "足智多谋", "谋" to "足智多谋",
+            "深" to "深谋远虑", "虑" to "深谋远虑", "明" to "明察秋毫", "察" to "明察秋毫",
+            "分" to "争分夺秒", "秒" to "争分夺秒", "精" to "精益求精", "益" to "精益求精",
+            "恒" to "持之以恒", "星" to "月明星稀", "稀" to "月明星稀", "箭" to "光阴似箭",
+            "合" to "志同道合", "同" to "形影不离", "形" to "形影不离", "影" to "形影不离",
+            "戒" to "戒骄戒躁", "躁" to "戒骄戒躁", "威" to "威风凛凛", "凛" to "威风凛凛",
+            "盛" to "繁荣昌盛", "繁" to "繁荣昌盛", "荣" to "繁荣昌盛", "昌" to "繁荣昌盛",
+            "盈" to "热泪盈眶", "眶" to "热泪盈眶", "澄" to "波光粼粼", "粼" to "波光粼粼",
+            "滴" to "水滴石穿", "艘" to "一艘帆船", "帆" to "一艘帆船", "航" to "航向大海",
+            "海" to "航向大海", "艺" to "多才多艺", "良" to "良师益友", "艰" to "艰苦奋斗",
+            "奋" to "艰苦奋斗", "斗" to "艰苦奋斗", "凤" to "龙飞凤舞", "舞" to "龙飞凤舞",
+            "凡" to "不同凡响", "处" to "处变不惊", "惊" to "处变不惊", "够" to "足够多",
+            "美" to "美不胜收", "胜" to "美不胜收", "收" to "美不胜收", "画" to "如诗如画",
+            "诗" to "如诗如画", "金" to "金榜题名", "榜" to "金榜题名", "题" to "金榜题名",
+            "名" to "金榜题名"
+        )
     }
 }
